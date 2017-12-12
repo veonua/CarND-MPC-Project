@@ -2,8 +2,7 @@
 #include <cppad/cppad.hpp>
 
 #ifndef HAVE_CSTDDEF
-    #include <cstddef>
-    #define HAVE_CSTDDEF 1
+#define HAVE_CSTDDEF 1
 #endif
 
 #include <cppad/ipopt/solve.hpp>
@@ -12,26 +11,21 @@
 
 using CppAD::AD;
 
-// TODO: Set the timestep length and duration
-size_t N = 10;
-double dt = 0.1;
+///  Set the timestep length and duration
+const size_t N = 15;
+const double dt = 0.20;
 
-// This value assumes the model presented in the classroom is used.
-//
-// It was obtained by measuring the radius formed by running the vehicle in the
-// simulator around in a circle with a constant steering angle and velocity on a
-// flat terrain.
-//
-// Lf was tuned until the the radius formed by the simulating the model
-// presented in the classroom matched the previous radius.
-//
-// This is the length from front to CoG that has a similar radius.
-const double Lf = 2.67;
+// set reference speed in m/s
+// set to 40.234 m/s = 90 mph
+const double ref_v = 40.234;
 
-
-// Both the reference cross track and orientation errors are 0.
-// The reference velocity is set to 40 mph.
-double ref_v = 40;
+#define K_CTE  8000
+#define K_EPSI 1000
+#define K_V 1
+#define K_DEL 10
+#define K_A 100
+#define K_DEL_DIFF 50
+#define K_A_DIFF 1
 
 // Solver takes all state and actuator variables in a singular vector.
 // Set up indeces for easier access later
@@ -58,29 +52,22 @@ class FG_eval {
       // Any additions to the cost should be added to `fg[0]`.
       fg[0] = 0;
 
-      // The part of the cost based on the reference state.
-      for (size_t t = 0; t < N; t++) {
-        fg[0] += CppAD::pow(vars[cte_start + t], 2);
-        fg[0] += CppAD::pow(vars[epsi_start + t], 2);
-        fg[0] += CppAD::pow(vars[v_start + t] - ref_v, 2);
-      }
-
-      // Minimize the use of actuators.
-      for (size_t t = 0; t < N - 1; t++) {
-        fg[0] += CppAD::pow(vars[delta_start + t], 2);
-        fg[0] += CppAD::pow(vars[a_start + t], 2);
-      }
-
-      // Minimize the value gap between sequential actuations.
-      for (size_t t = 0; t < N - 2; t++) {
-        fg[0] += CppAD::pow(vars[delta_start + t + 1] - vars[delta_start + t], 2);
-        fg[0] += CppAD::pow(vars[a_start + t + 1] - vars[a_start + t], 2);
-      }
-
-      //
-      // Setup Constraints
-      //
-      // NOTE: In this section you'll setup the model constraints.
+        // penalize for cross track error, orientation error and not keeping ref velocity
+        for (size_t i = 0; i < N; i++) {
+            fg[0] += K_CTE  * CppAD::pow(vars[cte_start + i], 2);
+            fg[0] += K_EPSI * CppAD::pow(vars[epsi_start + i], 2);
+            fg[0] += K_V    * CppAD::pow(vars[v_start + i] - ref_v, 2);
+        }
+        // penalize the use of actuators
+        for (size_t i = 0; i < N-1; i++) {
+            fg[0] += K_DEL * CppAD::pow(vars[delta_start + i], 2);
+            fg[0] += K_A   * CppAD::pow(vars[a_start + i], 2);
+        }
+        // penalize big value gaps in sequential actuations
+        for (size_t i = 0; i < N-2; i++) {
+            fg[0] += K_DEL_DIFF * CppAD::pow(vars[delta_start + i + 1] - vars[delta_start + i], 2);
+            fg[0] += K_A_DIFF   * CppAD::pow(vars[a_start + i + 1] - vars[a_start + i], 2);
+        }
 
       // Initial constraints
       //
@@ -116,8 +103,20 @@ class FG_eval {
         AD<double> delta0 = vars[delta_start + t - 1];
         AD<double> a0 = vars[a_start + t - 1];
 
-        AD<double> f0 = coeffs[0] + coeffs[1] * x0;
-        AD<double> psides0 = CppAD::atan(coeffs[1]);
+        AD<double> f0;
+        AD<double> psides0;
+
+          f0 = coeffs[0] +
+               coeffs[1] * x0 +
+               coeffs[2] * CppAD::pow(x0, 2);
+
+          auto tsides = coeffs[1] + 2 * coeffs[2] * x0;
+          // make it possible to switch between 2nd and 3rd degree polynomial fit
+          if (coeffs.size() >= 4) {
+              f0 += coeffs[3] * CppAD::pow(x0, 3);
+              tsides+=3 * coeffs[3] * CppAD::pow(x0,2);
+          }
+          psides0 = CppAD::atan(tsides);
 
         // Here's `x` to get you started.
         // The idea here is to constraint this value to be 0.
@@ -141,7 +140,6 @@ class FG_eval {
     }
 };
 
-
 //
 // MPC class definition
 //
@@ -149,7 +147,7 @@ class FG_eval {
 MPC::MPC() = default;
 MPC::~MPC() = default;
 
-vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
+vector<double> MPC::Solve(const Eigen::VectorXd& x0, const Eigen::VectorXd& coeffs) {
     typedef CPPAD_TESTVECTOR(double) Dvector;
 
     double x = x0[0];
@@ -229,7 +227,7 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
     constraints_upperbound[epsi_start] = epsi;
 
     // Object that computes objective and constraints
-    FG_eval fg_eval(std::move(coeffs));
+    FG_eval fg_eval(coeffs);
 
     // options
     std::string options;
@@ -251,9 +249,15 @@ vector<double> MPC::Solve(Eigen::VectorXd x0, Eigen::VectorXd coeffs) {
     bool ok = solution.status == CppAD::ipopt::solve_result<Dvector>::success;
 
     auto cost = solution.obj_value;
-    std::cout << "Cost " << cost << std::endl;
-    return {solution.x[x_start + 1],   solution.x[y_start + 1],
-            solution.x[psi_start + 1], solution.x[v_start + 1],
-            solution.x[cte_start + 1], solution.x[epsi_start + 1],
-            solution.x[delta_start],   solution.x[a_start]};
+    std::cout << "Cost " << cost << " ok:"<< ok << std::endl;
+
+    vector<double> result;
+    result.push_back(solution.x[delta_start]);
+    result.push_back(solution.x[a_start]);
+
+    for (size_t i = 0; i < N-1; i++) {
+        result.push_back(solution.x[x_start + i]);
+        result.push_back(solution.x[y_start + i]);
+    }
+    return result;
 }

@@ -35,7 +35,7 @@ string hasData(string s) {
 }
 
 // Evaluate a polynomial.
-double polyeval(Eigen::VectorXd coeffs, double x) {
+double polyeval(const Eigen::VectorXd &coeffs, double x) {
     double result = 0.0;
     for (int i = 0; i < coeffs.size(); i++) {
         result += coeffs[i] * pow(x, i);
@@ -67,18 +67,13 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
     return result;
 }
 
-double mph_to_mps(double mph_) {
-    return mph_*0.44704;  //1 mph = 0.44704 m/s
-}
-
 int main() {
     uWS::Hub h;
 
     // MPC is initialized here!
     MPC mpc;
-    Eigen::VectorXd state(6);
 
-    h.onMessage([&mpc, &state](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+    h.onMessage([&mpc](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                                uWS::OpCode opCode) {
         // "42" at the start of the message means there's a websocket message event.
         // The 4 signifies a websocket message
@@ -99,58 +94,49 @@ int main() {
                     double psi = j[1]["psi"];
                     double v = j[1]["speed"];
 
-                    // Velocity, as reported by the simulator, is in mph,
-                    // while the waypoints are reported in meters.
-                    v = mph_to_mps(v);
-
                     /////
-                    auto len = ptsx.size();
+                    const auto len = ptsx.size();
                     Eigen::VectorXd wp_x(len);
                     Eigen::VectorXd wp_y(len);
-                    auto cosi = cos(psi);
-                    auto sini = sin(psi);
+                    const auto cospsi = cos(-psi);
+                    const auto sinpsi = sin(-psi);
 
                     for (size_t i = 0; i < len; i++) {
-                        double x_t = ptsx[i] - px,  // x, y translated
-                                y_t = ptsy[i] - py;
-                        wp_x[i] =  x_t * cosi + y_t * sini;
-                        wp_y[i] = -x_t * sini + y_t * cosi;
+                        const double dx = ptsx[i] - px,  // x, y translated
+                                     dy = ptsy[i] - py;
+                        wp_x[i] =  dx * cospsi - dy * sinpsi;
+                        wp_y[i] =  dx * sinpsi + dy * cospsi;
                     }
                     // fit polynimal to received waypoints
-                    Eigen::VectorXd wpts_coeff = polyfit(wp_x, wp_y, 2);
-
-                    double steer_value;
-                    double throttle_value;
-
-                    // reset vehicle position in accordance to transformation
-                    px = 0.0;
-                    py = 0.0;
-                    psi = 0;
+                    Eigen::VectorXd coeffs = polyfit(wp_x, wp_y, 3);
 
                     // compute cte
-                    double cte = wpts_coeff[0];
-                    double epsi = -atan(wpts_coeff[1]);
+                    double cte = coeffs[0];
+                    double epsi = - atan(coeffs[1]);
 
-                    state << px, py, psi, v, cte, epsi;
+                    Eigen::VectorXd state(6);
+                    state <<  0.0,  0.0, 0.0, v, cte, epsi;
 
-                    vector<double> solution = mpc.Solve(state, wpts_coeff);
-                    auto num_pts = (solution.size() - 2) / 2;
+                    vector<double> solution = mpc.Solve(state, coeffs);
 
-                    steer_value = -solution[0];  // minus sign because axis y is inverted in simulator
-                    throttle_value = solution[1];  // minus sign because axis y is inverted in simulator
+                    auto steer_value = solution[0];
+                    auto throttle_value = solution[1];
 
-                    vector<double> mpc_x_vals(num_pts);
-                    vector<double> mpc_y_vals(num_pts);
+                    vector<double> mpc_x_vals;
+                    vector<double> mpc_y_vals;
 
-                    for (size_t i = 0; i < num_pts; i++) {
-                        mpc_x_vals[i] = solution[i + 2];
-                        mpc_y_vals[i] = solution[num_pts + i + 2];
+                    for (size_t i = 2; i < solution.size(); i++) {
+                        if (i % 2 == 0) {
+                            mpc_x_vals.push_back(solution[i]);
+                        } else {
+                            mpc_y_vals.push_back(solution[i]);
+                        }
                     }
 
                     json msgJson;
                     // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
                     // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
-                    msgJson["steering_angle"] = steer_value;
+                    msgJson["steering_angle"] = -steer_value/ deg2rad(25);
                     msgJson["throttle"] = throttle_value;
 
                     //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
@@ -163,9 +149,10 @@ int main() {
                     vector<double> next_x_vals;
                     vector<double> next_y_vals;
 
-                    for (int i = 0; i < 15; i++) {
-                        next_x_vals.push_back(i*5);
-                        next_y_vals.push_back(polyeval(wpts_coeff, i*5));
+                    for (size_t i = 0; i < 15; i++) {
+                        auto x = i*5;
+                        next_x_vals.push_back(x);
+                        next_y_vals.push_back(polyeval(coeffs, x));
                     }
 
                     //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
