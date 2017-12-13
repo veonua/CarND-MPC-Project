@@ -67,6 +67,8 @@ Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals,
     return result;
 }
 
+const uint latency_ms=100;
+
 int main() {
     uWS::Hub h;
 
@@ -93,6 +95,9 @@ int main() {
                     double py = j[1]["y"];
                     double psi = j[1]["psi"];
                     double v = j[1]["speed"];
+                    double a = j[1]["throttle"];
+                    double delta = j[1]["steering_angle"];
+                    v*= 0.44704;
 
                     /////
                     const auto len = ptsx.size();
@@ -110,12 +115,18 @@ int main() {
                     // fit polynimal to received waypoints
                     Eigen::VectorXd coeffs = polyfit(wp_x, wp_y, 3);
 
-                    // compute cte
-                    double cte = coeffs[0];
-                    double epsi = - atan(coeffs[1]);
+                    // Apply latency
+                    double psides0 = atan(coeffs[1]);
+                    double latency_dt = latency_ms/1000.0;
+                    double x_latency = 0 + v * cos(0) * latency_dt;
+                    double y_latency = 0 + v * sin(0) * latency_dt;
+                    double psi_latency = 0 - v / mpc.Lf * delta * latency_dt;
+                    double v_latency = v + a * latency_dt;
+                    double epsi_latency = 0 - psides0 - v * delta / mpc.Lf * latency_dt;
+                    double cte_latency = polyeval(coeffs, x_latency) - y_latency;
 
                     Eigen::VectorXd state(6);
-                    state <<  0.0,  0.0, 0.0, v, cte, epsi;
+                    state << x_latency, y_latency, psi_latency, v_latency, cte_latency, epsi_latency;
 
                     vector<double> solution = mpc.Solve(state, coeffs);
 
@@ -173,7 +184,7 @@ int main() {
                     //
                     // NOTE: REMEMBER TO SET THIS TO 100 MILLISECONDS BEFORE
                     // SUBMITTING.
-                    this_thread::sleep_for(chrono::milliseconds(100));
+                    this_thread::sleep_for(chrono::milliseconds(latency_ms));
                     ws.send(msg.data(), msg.length(), uWS::OpCode::TEXT);
                 }
             } else {

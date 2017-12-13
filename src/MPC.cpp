@@ -12,20 +12,20 @@
 using CppAD::AD;
 
 ///  Set the timestep length and duration
-const size_t N = 15;
-const double dt = 0.20;
+const size_t N = 5;
+const double dt = 0.10;
 
 // set reference speed in m/s
 // set to 40.234 m/s = 90 mph
-const double ref_v = 40.234;
+const double ref_v = 20.234;
 
-#define K_CTE  8000
+#define K_CTE  50
 #define K_EPSI 1000
-#define K_V 1
-#define K_DEL 10
-#define K_A 100
-#define K_DEL_DIFF 50
-#define K_A_DIFF 1
+#define K_V 100
+#define K_DEL 100
+#define K_A 1
+#define K_DEL_DIFF 1000
+#define K_A_DIFF 100
 
 // Solver takes all state and actuator variables in a singular vector.
 // Set up indeces for easier access later
@@ -150,18 +150,18 @@ MPC::~MPC() = default;
 vector<double> MPC::Solve(const Eigen::VectorXd& x0, const Eigen::VectorXd& coeffs) {
     typedef CPPAD_TESTVECTOR(double) Dvector;
 
-    double x = x0[0];
-    double y = x0[1];
-    double psi = x0[2];
-    double v = x0[3];
-    double cte = x0[4];
-    double epsi = x0[5];
+    const double x = x0[0];
+    const double y = x0[1];
+    const double psi = x0[2];
+    const double v = x0[3];
+    const double cte = x0[4];
+    const double epsi = x0[5];
 
     // number of independent variables
     // N timesteps == N - 1 actuations
-    size_t n_vars = N * 6 + (N - 1) * 2;
+    const size_t n_vars = N * 6 + (N - 1) * 2;
     // Number of constraints
-    size_t n_constraints = N * 6;
+    const size_t n_constraints = N * 6;
 
     // Initial value of the independent variables.
     // Should be 0 except for the initial values.
